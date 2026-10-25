@@ -168,6 +168,8 @@ def main():
     parser.add_argument("--mode", choices=("fast", "quality"), default="fast",
                         help="fast: third-party first; quality: native share first")
     parser.add_argument("--output", default="output-fast", help="Destination directory")
+    parser.add_argument("--expect-title", default="", help="Required title substring for correct-video verification")
+    parser.add_argument("--expect-author", default="", help="Required author substring for correct-video verification")
     args = parser.parse_args()
     t0 = time.perf_counter()
     client = session()
@@ -180,6 +182,10 @@ def main():
         for resolver in ordered:
             try:
                 video = resolver(video_id, client)
+                if args.expect_title and args.expect_title not in video["title"]:
+                    raise RuntimeError(f"Video title mismatch: {video['title']!r}")
+                if args.expect_author and args.expect_author not in video["author"]:
+                    raise RuntimeError(f"Video author mismatch: {video['author']!r}")
                 print(f"RESOLVED {video['provider']} in {video['resolution_seconds']}s, "
                       f"{len(video['links'])} CDN candidate(s), "
                       f"author={video['author']} title={video['title'][:60]}", flush=True)
