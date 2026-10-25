@@ -35,7 +35,8 @@ def extract_id(url, client):
             match = VIDEO_ID.search(link)
             if match:
                 return match.group(1), time.perf_counter() - t0
-    raise ValueError("Could not resolve a video ID from the share link")
+    print("SHORTLINK_FALLBACK: no ID in redirect, attempting third-party API with original URL", flush=True)
+    return "", time.perf_counter() - t0
 
 def find_aweme(tree, video_id):
     # Iterative search: avoids assuming an exact frontend JSON nesting/version.
@@ -175,6 +176,14 @@ def main():
     client = session()
     try:
         video_id, redirect_s = (args.id, 0.0) if args.id else extract_id(args.url, client)
+        if not video_id:
+            print("TRY_DIRECT_API", flush=True)
+            response = client.get("https://api.bugpk.com/api/douyin", params={"url": args.url}, timeout=(6, 18))
+            response.raise_for_status()
+            payload = response.json()
+            data = payload.get("data") or {}
+            video_id = str(data.get("aweme_id") or data.get("id") or data.get("item_id") or "")
+            print("DIRECT_API_RESULT", payload.get("code"), "id", video_id, "desc", str(data.get("desc", ""))[:120], flush=True)
         if not re.fullmatch(r"\d{18,20}", video_id):
             raise ValueError("Invalid Douyin video ID")
         ordered = [resolve_third_party, resolve_native] if args.mode == "fast" else [resolve_native, resolve_third_party]
