@@ -75,6 +75,7 @@ jobs:
                       print("FEED",vid,resp.status_code,resp.url,resp.text[:120],flush=True)
                       resp.raise_for_status()
                       entries = resp.json().get("aweme_list") or []
+                      print("FEED_LIST",len(entries),[(a.get("aweme_id"),(a.get("author") or {}).get("nickname"),(a.get("desc") or "")[:100],list((a.get("video") or {}).keys())[:12]) for a in entries[:4]],flush=True)
                       matches = [a for a in entries if str(a.get("aweme_id",""))==vid]
                       for a in matches:
                           title = a.get("desc","")
