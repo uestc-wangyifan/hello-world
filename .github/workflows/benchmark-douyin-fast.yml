@@ -1,0 +1,23 @@
+name: Benchmark fast Douyin MP4 download
+on:
+  push:
+    branches: [chatgpt-douyin-20261026]
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -q requests mutagen
+      - name: Fast path benchmark
+        run: python scripts/douyin_fast.py "https://v.douyin.com/6vIVo9HVdGM/" --id 7435545283435531520 --mode fast
+      - name: Upload video
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: douyin-fast-benchmark
+          path: output-fast/*.mp4
+          if-no-files-found: warn
+          retention-days: 2
