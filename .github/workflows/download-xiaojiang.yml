@@ -1,0 +1,23 @@
+name: Download Xiaojiang Douyin video
+on:
+  push:
+    branches: [chatgpt-douyin-xiaojiang-20261026]
+permissions:
+  contents: read
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install -q requests mutagen
+      - name: Fetch and verify
+        run: python scripts/douyin_fast.py "https://v.douyin.com/NH0g-aiWPCg/" --mode fast --expect-author "小姜" --expect-title "首尔今天有点鲁"
+      - name: Upload MP4
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: xiaojiang-seoul-video
+          path: output-fast/*.mp4
+          if-no-files-found: warn
+          retention-days: 2
