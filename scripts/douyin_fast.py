@@ -183,6 +183,11 @@ def main():
             payload = response.json()
             data = payload.get("data") or {}
             video_id = str(data.get("aweme_id") or data.get("id") or data.get("item_id") or "")
+            print("DIRECT_API_KEYS", list(data.keys()), "RAW_JSON", json.dumps(data, ensure_ascii=False)[:2500], flush=True)
+            if not video_id and isinstance(data.get("url"), str) and data["url"].startswith("http"):
+                video = {"provider":"direct-api-image-post", "id":"spring-post", "title":data.get("desc",""), "author":(data.get("author") or {}).get("name",""), "links":[data["url"]], "resolution_seconds":0}
+                print("POST_TYPE", "image post or direct media", "url",data["url"][:160],flush=True)
+                return 2
             print("DIRECT_API_RESULT", payload.get("code"), "id", video_id, "desc", str(data.get("desc", ""))[:120], flush=True)
         if not re.fullmatch(r"\d{18,20}", video_id):
             raise ValueError("Invalid Douyin video ID")
