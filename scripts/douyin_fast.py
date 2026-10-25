@@ -166,7 +166,7 @@ def main():
     parser.add_argument("url", help="Douyin share, canonical, or short URL")
     parser.add_argument("--id", default=None, help="Known 19-digit ID (skip short-link lookup)")
     parser.add_argument("--mode", choices=("fast", "quality"), default="fast",
-                        help="fast: native share first; quality: third-party first")
+                        help="fast: third-party first; quality: native share first")
     parser.add_argument("--output", default="output-fast", help="Destination directory")
     args = parser.parse_args()
     t0 = time.perf_counter()
@@ -175,7 +175,7 @@ def main():
         video_id, redirect_s = (args.id, 0.0) if args.id else extract_id(args.url, client)
         if not re.fullmatch(r"\d{18,20}", video_id):
             raise ValueError("Invalid Douyin video ID")
-        ordered = [resolve_native, resolve_third_party] if args.mode == "fast" else [resolve_third_party, resolve_native]
+        ordered = [resolve_third_party, resolve_native] if args.mode == "fast" else [resolve_native, resolve_third_party]
         failures = []
         for resolver in ordered:
             try:
