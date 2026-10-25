@@ -8,112 +8,16 @@ permissions:
 jobs:
   download:
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 12
     steps:
-      - name: Install public tools
-        run: python -m pip install -q --upgrade yt-dlp requests
-      - name: Resolve and save MP4
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p output
-          python - <<'PY'
-          import requests, re, os, subprocess, pathlib, json, sys
-          URL = "https://v.douyin.com/6vIVo9HVdGM/"
-          FALLBACK_ID = "7435545283435531520"
-          OUT = pathlib.Path("output/video.mp4")
-          UA_WEB = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          UA_APP = "com.ss.android.ugc.aweme/310600 (Linux; U; Android 13; zh_CN; Pixel 6; Build/TP1A.220624.014; Cronet/TTNetVersion:fb4d219f)"
-          ses = requests.Session()
-          ids = []
-          for ua in (UA_WEB, UA_APP):
-              try:
-                  r = ses.get(URL, headers={"User-Agent": ua}, timeout=20, allow_redirects=True)
-                  print("SHORT_URL", r.status_code, r.url, "history", [(x.status_code,x.headers.get("location","")[:220]) for x in r.history], flush=True)
-                  for item in list(r.history) + [r]:
-                      for t in (item.url, item.headers.get("location",""), item.text[:30000] if "text" in item.headers.get("content-type","") or "html" in item.headers.get("content-type","") else ""):
-                          for regex in (r"/(?:share/)?video/(\d{18,20})",r"(?:aweme_id|modal_id)[=\"':]+(\d{18,20})"):
-                              for m in re.findall(regex, t):
-                                  if m not in ids: ids.append(m)
-              except Exception as e:
-                  print("SHORT_URL_ERROR",str(e),flush=True)
-          if FALLBACK_ID not in ids: ids.append(FALLBACK_ID)
-          print("CANDIDATE_IDS",ids,flush=True)
-          def check_mp4(p):
-              if not p.exists() or p.stat().st_size < 50000:
-                  return False
-              try:
-                  q = subprocess.run(["ffprobe","-v","error","-show_entries","stream=codec_type,width,height,codec_name","-of","json",str(p)], capture_output=True,text=True,timeout=30)
-                  print("VALIDATION",p.stat().st_size,q.returncode,q.stdout[:800],q.stderr[:500],flush=True)
-                  return q.returncode == 0 and any(st.get("codec_type")=="video" for st in json.loads(q.stdout).get("streams",[]))
-              except Exception as e:
-                  print("VALIDATION_ERROR",str(e),flush=True)
-                  return False
-          def download_one(url):
-              try:
-                  headers = {"User-Agent": UA_APP,"Referer":"https://www.douyin.com/","Accept":"*/*"}
-                  with ses.get(url,headers=headers,stream=True,timeout=(12,60),allow_redirects=True) as resp:
-                      print("CDN",resp.status_code,resp.headers.get("content-type"),resp.url[:180],flush=True)
-                      resp.raise_for_status()
-                      if "text/html" in resp.headers.get("content-type",""):
-                          return False
-                      temp = OUT.with_suffix(".part")
-                      with open(temp,"wb") as f:
-                          for block in resp.iter_content(chunk_size=1<<20):
-                              if block: f.write(block)
-                      os.replace(temp,OUT)
-                  if check_mp4(OUT):
-                      return True
-                  OUT.unlink(missing_ok=True)
-              except Exception as e:
-                  print("CDN_ERROR",repr(e),flush=True)
-              return False
-          for vid in ids:
-              for api in ("https://api5-normal-c-hl.amemv.com/aweme/v1/feed/", "https://aweme.snssdk.com/aweme/v1/feed/"):
-                  try:
-                      resp = ses.get(api,params={"aweme_id":vid,"aid":"1128","device_platform":"android","version_code":"310600"},headers={"User-Agent":UA_APP,"Accept":"application/json"},timeout=22)
-                      print("FEED",vid,resp.status_code,resp.url,resp.text[:120],flush=True)
-                      resp.raise_for_status()
-                      entries = resp.json().get("aweme_list") or []
-                      print("FEED_LIST",len(entries),[(a.get("aweme_id"),(a.get("author") or {}).get("nickname"),(a.get("desc") or "")[:100],list((a.get("video") or {}).keys())[:12]) for a in entries[:4]],flush=True)
-                      matches = [a for a in entries if str(a.get("aweme_id",""))==vid]
-                      for a in matches:
-                          title = a.get("desc","")
-                          who = (a.get("author") or {}).get("nickname","")
-                          print("MATCHED",vid,who,title[:200],flush=True)
-                          video = a.get("video") or {}
-                          sources = sorted(video.get("bit_rate") or [],key=lambda b:b.get("bit_rate",0),reverse=True)
-                          sources += [video]
-                          urls = []
-                          for s in sources:
-                              for key in ("play_addr","play_addr_265","download_addr"):
-                                  for link in (s.get(key) or {}).get("url_list") or []:
-                                      if isinstance(link,str) and link.startswith("http") and link not in urls:
-                                          urls.append(link)
-                          print("MEDIA_VARIANTS",len(urls),flush=True)
-                          for v in urls:
-                              if download_one(v):
-                                  print("SUCCESS DIRECT",str(OUT),flush=True)
-                                  sys.exit(0)
-                  except Exception as e:
-                      print("FEED_ERROR",repr(e),flush=True)
-          targets = [URL]+["https://www.douyin.com/video/"+vid for vid in ids]
-          for target in targets:
-              cmd = [sys.executable,"-m","yt_dlp","--no-playlist","--no-overwrites","--retries","2","--socket-timeout","18","--merge-output-format","mp4","--remux-video","mp4","--user-agent",UA_WEB,"-o","output/video.%(ext)s",target]
-              print("YTDLP",target,flush=True)
-              result = subprocess.run(cmd,timeout=110,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-              print(result.stdout[-6000:],flush=True)
-              if check_mp4(OUT):
-                  print("SUCCESS YTDLP",flush=True)
-                  sys.exit(0)
-          print("DOWNLOAD FAILED: no validated MP4",flush=True)
-          sys.exit(1)
-          PY
-      - name: Upload obtained file
+      - uses: actions/checkout@v4
+      - run: python -m pip install -q requests
+      - run: python scripts/resolve_douyin.py
+      - name: Upload result
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: douyin-attempt
+          name: douyin-media
           path: output/*
           if-no-files-found: warn
-          retention-days: 1
+          retention-days: 2
