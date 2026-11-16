@@ -33,7 +33,11 @@ jobs:
                   await page.goto('https://www.douyin.com/video/7707940295400903291',wait_until='domcontentloaded',timeout=60000)
                   await page.wait_for_timeout(7000)
                   print('PAGE',page.url, 'TITLE',await page.title(),flush=True)
-                  result=await page.evaluate("""async () => {
+                  result=None
+                  for attempt in range(6):
+                      try:
+                          await page.wait_for_load_state('domcontentloaded', timeout=15000)
+                          result=await page.evaluate("""async () => {
                       const u='/aweme/v1/web/aweme/detail/?aweme_id=7707940295400903291&device_platform=webapp&aid=6383';
                       const r=await fetch(u, {credentials:'include',headers:{Accept:'application/json'}});
                       const txt=await r.text();
@@ -42,6 +46,11 @@ jobs:
                           return {status:r.status, excerpt:txt.slice(0,400), urls:a?.video?.play_addr?.url_list||a?.video?.play_addr_h264?.url_list||[]};
                       } catch(e) {return {status:r.status, excerpt:txt.slice(0,400),urls:[]}}
                   }""")
+                          break
+                      except Exception as e:
+                          print('EVAL_RETRY',attempt,str(e)[:180],flush=True)
+                          await page.wait_for_timeout(1500)
+                  if result is None: return
                   print('DETAIL',str(result)[:1200],flush=True)
                   for u in result['urls']:
                       try:
