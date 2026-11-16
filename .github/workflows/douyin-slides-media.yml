@@ -1,0 +1,102 @@
+name: Fetch Douyin slides media 7707940295400903291
+on:
+  push:
+    branches:
+      - chatgpt-douyin-slides-7707940295400903291
+    paths:
+      - .github/workflows/douyin-slides-media.yml
+permissions:
+  contents: read
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Probe genuine slides content and save video
+        shell: bash
+        run: |
+          mkdir -p output
+          cat > probe.py <<'PY'
+          import requests, json, re, random, os, sys
+          ID = '7707940295400903291'
+          BASE = f'https://www.iesdouyin.com/share/slides/{ID}/'
+          UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1'
+          S=requests.Session()
+          S.headers.update({'User-Agent':UA,'Referer':BASE,'Accept':'*/*'})
+          try:
+              r=S.get(BASE, timeout=25)
+              print('PAGE',r.status_code,r.url.split('?')[0],r.headers.get('Content-Type'),len(r.content),flush=True)
+              html=r.text
+              open('output/page_snippet.txt','w',encoding='utf-8').write(html[:15000])
+          except Exception as e: print('PAGE ERROR',str(e)); html=''
+          payloads=[]
+          for key in ('window._ROUTER_DATA','window.__INITIAL_STATE__','__NEXT_DATA__'):
+              idx=html.find(key)
+              if idx>=0:
+                  print('PAGE EMBEDDED',key,'AT',idx,'EXCERPT',html[idx:idx+250].replace('\n',' '),flush=True)
+                  start=html.find('{',idx)
+                  if start!=-1:
+                      try:
+                          v,n=json.JSONDecoder().raw_decode(html[start:])
+                          payloads.append((key,v))
+                          print('PARSED',key,str(type(v)),flush=True)
+                      except Exception as e:print('EMBED PARSE ERROR',str(e)[:160],flush=True)
+          webid='75'+str(random.randrange(100000000000000))
+          candidates=[
+            ('slides_full','https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/',{'reflow_source':'reflow_page','web_id':webid,'device_id':webid,'aweme_ids':f'[{ID}]','request_source':'200','a_bogus':'a'*80}),
+            ('slides_simple','https://www.iesdouyin.com/web/api/v2/aweme/slidesinfo/',{'aweme_ids':f'[{ID}]','reflow_source':'reflow_page'}),
+            ('iteminfo','https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/',{'item_ids':f'[{ID}]'}),
+            ('web_detail','https://www.iesdouyin.com/aweme/v1/web/aweme/detail/',{'aweme_id':ID,'aid':6383}),
+          ]
+          for name,url,params in candidates:
+              try:
+                  r=S.get(url,params=params,timeout=25)
+                  print('API',name,r.status_code,len(r.content),r.headers.get('content-type'),'BODY',r.text[:320].replace('\n',' '),flush=True)
+                  try:
+                      j=r.json();payloads.append((name,j));open('output/'+name+'.json','w',encoding='utf-8').write(json.dumps(j,ensure_ascii=False)[:1000000])
+                  except: pass
+              except Exception as e:print('API ERROR',name,str(e),flush=True)
+          media=[]
+          def walk(obj,path='root'):
+              if isinstance(obj,dict):
+                  if path.count('.')<6: print('NODE',path,'KEYS',','.join(obj.keys())[:200],flush=True)
+                  if ('url_list' in obj and isinstance(obj['url_list'],list)):
+                      urls=[u for u in obj['url_list'] if isinstance(u,str) and u.startswith('http')]
+                      if urls:media.append((path,urls))
+                  for k,v in obj.items():walk(v,path+'.'+str(k))
+              elif isinstance(obj,list):
+                  for i,v in enumerate(obj):
+                      if i<100:walk(v,path+'['+str(i)+']')
+          for name,data in payloads:
+              walk(data,name)
+          print('URL_LISTS_FOUND',len(media),flush=True)
+          for path, urls in media:
+              print('URLCAND',path,urls[0][:150],flush=True)
+          primary=[(p,u) for p,u in media if re.search('video|clip|play_addr|live',p,re.I)]
+          print('PRIMARY_COUNT',len(primary),flush=True)
+          for path, urls in primary:
+              for url in urls[:3]:
+                  try:
+                      z=S.get(url,timeout=40,headers={'Referer':'https://www.douyin.com/','User-Agent':UA})
+                      print('FETCH',path,z.status_code,len(z.content),z.headers.get('content-type'),z.content[:20],flush=True)
+                      if len(z.content)>100000 and (z.content[4:8]==b'ftyp' or z.headers.get('content-type','').startswith('video/')):
+                          fp='output/'+ID+'.mp4'
+                          open(fp,'wb').write(z.content)
+                          print('SAVED MP4',fp,len(z.content),flush=True)
+                          sys.exit(0)
+                  except Exception as e: print('FETCH ERR',str(e)[:100],flush=True)
+          print('RESULT: no downloadable MP4 yet',flush=True)
+          PY
+          python probe.py
+      - name: Upload probe result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-slides-7707940295400903291
+          path: output/
+          retention-days: 1
