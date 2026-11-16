@@ -1,0 +1,115 @@
+name: Diagnose Douyin multi-media 7707471779908236506
+on:
+  push:
+    branches:
+      - chatgpt-douyin-full-7707471779908236506
+    paths:
+      - .github/workflows/douyin-discover.yml
+permissions:
+  contents: read
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prepare browser
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Discover target media
+        shell: bash
+        run: |
+          cat > discover.py <<'PY'
+          import asyncio, json, re, os, urllib.parse, time, traceback
+          from playwright.async_api import async_playwright
+          ID='7707471779908236506'
+          os.makedirs('discovery',exist_ok=True)
+          reports=[]
+          responses=[]
+          def save_json(path,obj):
+              with open('discovery/'+path,'w',encoding='utf-8') as f: json.dump(obj,f,ensure_ascii=False,indent=2)
+          def summarize_obj(obj,loc='root',depth=0):
+              if depth>16:return
+              if isinstance(obj,dict):
+                  keys=set(obj)
+                  if ('image_list' in keys or 'images' in keys or 'aweme_id' in keys or 'slides' in keys or 'video' in keys or 'image_infos' in keys):
+                      img=obj.get('image_list') or obj.get('images') or obj.get('image_infos')
+                      aud=obj.get('music') or obj.get('audio')
+                      vi=obj.get('video')
+                      desc={'path':loc[:200],'keys':list(keys)[:40],'id':str(obj.get('aweme_id') or obj.get('item_id') or '')[:50],'imgcount':len(img) if isinstance(img,list) else None,'video':isinstance(vi,dict),'audio':isinstance(aud,dict)}
+                      reports.append(desc)
+                      print('NODE',json.dumps(desc,ensure_ascii=False),flush=True)
+                  for k,v in obj.items():
+                      if isinstance(v,(dict,list)): summarize_obj(v,loc+'.'+str(k),depth+1)
+              elif isinstance(obj,list):
+                  for i,v in enumerate(obj[:80]):summarize_obj(v,loc+'['+str(i)+']',depth+1)
+          async def main():
+              async with async_playwright() as p:
+                  b=await p.chromium.launch(headless=True,args=['--no-sandbox'])
+                  ctx=await b.new_context(viewport={'width':1280,'height':900},locale='zh-CN')
+                  page=await ctx.new_page()
+                  async def handler(r):
+                      try:
+                          ct=r.headers.get('content-type','')
+                          u=r.url
+                          if ('/aweme/' in u or '/web/api/v2/' in u) and ('json' in ct or 'text/plain' in ct) and len(responses)<150:
+                              body=await r.body()
+                              if len(body)<2000000:
+                                  txt=body.decode('utf-8','replace')
+                                  entry={'status':r.status,'path':urllib.parse.urlsplit(u).path,'size':len(body),'has_target': ID in txt}
+                                  responses.append(entry)
+                                  print('API',json.dumps(entry,ensure_ascii=False),flush=True)
+                                  try:
+                                      j=json.loads(txt)
+                                      if ID in txt or 'detail' in u or 'slidesinfo' in u:
+                                          name='api_'+str(len(responses))+'_'+str(r.status)+'.json'
+                                          save_json(name,j)
+                                          summarize_obj(j,'resp_'+name)
+                                  except: pass
+                          if ('video/' in ct or '/video/' in u) and len(responses)<150:
+                              print('MEDIA_RESPONSE',r.status,ct,urllib.parse.urlsplit(u).netloc,urllib.parse.urlsplit(u).path[:75],flush=True)
+                      except Exception as e:
+                          print('HANDLER_ERROR',str(e)[:150],flush=True)
+                  page.on('response',handler)
+                  try:
+                      u=f'https://www.douyin.com/note/{ID}'
+                      await page.goto(u,wait_until='domcontentloaded',timeout=60000)
+                      await page.wait_for_timeout(13000)
+                      print('FINAL_URL',page.url, 'TITLE',await page.title(),flush=True)
+                      body=await page.locator('body').inner_text(timeout=10000)
+                      print('BODY',body[:1200].replace('\n',' | '),flush=True)
+                      await page.screenshot(path='discovery/page.png')
+                      with open('discovery/page.html','w',encoding='utf-8') as f:f.write((await page.content())[:2000000])
+                      scripts=await page.evaluate("""() => Array.from(document.scripts).map(s=>({id:s.id,type:s.type,length:(s.textContent||'').length,src:s.src})).filter(s=>s.length>500||s.id).slice(0,100)""")
+                      print('SCRIPTS',json.dumps(scripts,ensure_ascii=False)[:2000],flush=True)
+                      for sid in ('RENDER_DATA','__NEXT_DATA__','__INITIAL_STATE__'):
+                          txt=await page.evaluate("""(id)=>document.getElementById(id)?.textContent||''""",sid)
+                          print('EMBED',sid,len(txt),ID in txt,flush=True)
+                          if txt:
+                              val=urllib.parse.unquote(txt)
+                              try:
+                                  j=json.loads(val)
+                                  save_json('embedded_'+sid+'.json',j)
+                                  summarize_obj(j,'embedded_'+sid)
+                              except Exception as e:print('EMBED_PARSE_ERR',sid,str(e)[:250],flush=True)
+                      media=await page.evaluate("""() => ({imgs:Array.from(document.images).slice(0,70).map(x=>({alt:x.alt,src:x.currentSrc.slice(0,180),w:x.naturalWidth,h:x.naturalHeight})), videos:Array.from(document.querySelectorAll('video')).slice(0,12).map(x=>({src:x.currentSrc.slice(0,160),ready:x.readyState}))})""")
+                      print('DOM_MEDIA',json.dumps(media,ensure_ascii=False)[:8000],flush=True)
+                      save_json('dom_media.json',media)
+                  except Exception as e:
+                      print('PAGE_ERR',repr(e),traceback.format_exc()[-1500:],flush=True)
+                  save_json('report.json',{'responses':responses,'nodes':reports})
+                  await b.close()
+          asyncio.run(main())
+          
+          PY
+          python discover.py
+      - name: Upload diagnostic result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-discovery-7707471779908236506
+          path: discovery/
+          retention-days: 1
