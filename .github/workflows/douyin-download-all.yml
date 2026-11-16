@@ -1,0 +1,113 @@
+name: Download all original Douyin slide media
+on:
+  push:
+    branches:
+      - chatgpt-douyin-full-7707471779908236506
+    paths:
+      - .github/workflows/douyin-download-all.yml
+permissions:
+  contents: read
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install browser and dependencies
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Save actual target page media
+        shell: bash
+        run: |
+          cat > download_all.py <<'PY'
+          import asyncio, json, re, os, urllib.parse, time, zipfile, subprocess
+          from playwright.async_api import async_playwright
+          ID='7707471779908236506'
+          OUT='Douyin_7707471779908236506'
+          os.makedirs(OUT,exist_ok=True)
+          manifest={'id':ID,'expected_items':16,'items':[],'audio':{},'errors':[]}
+          async def main():
+            async with async_playwright() as p:
+              browser=await p.chromium.launch(headless=True,args=['--no-sandbox'])
+              ctx=await browser.new_context(viewport={'width':1280,'height':900},locale='zh-CN',user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36')
+              page=await ctx.new_page()
+              await page.goto('https://www.douyin.com/note/'+ID,wait_until='domcontentloaded',timeout=60000)
+              await page.wait_for_timeout(6500)
+              html=await page.content()
+              parts=re.findall(r'self\.__pace_f\.push\(\[1,("(?:\\.|[^"\\])*")\]\)',html)
+              data=None
+              for raw in parts:
+                try:
+                  txt=json.loads(raw)
+                  if ID not in txt or 'clipType' not in txt:continue
+                  val=json.loads(txt.split(':',1)[1])
+                  if isinstance(val,list) and len(val)>=4:
+                    obj=val[3]['aweme']['detail']
+                    if str(obj.get('awemeId'))==ID and len(obj.get('images',[]))>0:
+                      data=obj;break
+                except Exception as e:print('PARSE_SKIP',str(e)[:150],flush=True)
+              if data is None:
+                raise RuntimeError('TARGET_MEDIA_DATA_NOT_FOUND')
+              imgs=data['images']
+              manifest['expected_items']=len(imgs)
+              manifest['title']=data.get('desc','')
+              manifest['source']='https://www.douyin.com/note/'+ID
+              print('TARGET_FOUND count',len(imgs),'clipTypes',[x.get('clipType') for x in imgs],flush=True)
+              async def fetch(urls,path,kind):
+                if isinstance(urls,str):urls=[urls]
+                for url in urls:
+                  try:
+                    resp=await ctx.request.get(url,timeout=60000,headers={'Referer':'https://www.douyin.com/','User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36'})
+                    content=await resp.body()
+                    ct=resp.headers.get('content-type','')
+                    print('FETCH',path,resp.status,len(content),ct[:35],flush=True)
+                    if not resp.ok or len(content)<10000: continue
+                    if kind=='video' and content[4:8]!=b'ftyp':continue
+                    if kind=='image' and not (content.startswith(b'\xff\xd8') or content.startswith(b'RIFF') or content.startswith(b'\x89PNG')):continue
+                    if kind=='audio' and not (content.startswith(b'ID3') or content[:2]==b'\xff\xfb' or content[:2]==b'\xff\xf3' or content[:2]==b'\xff\xf2' or 'audio' in ct):continue
+                    open(path,'wb').write(content)
+                    return {'ok':True,'bytes':len(content),'mime':ct,'file':os.path.basename(path)}
+                  except Exception as e:print('FETCH_ERR',path,str(e)[:150],flush=True)
+                return {'ok':False,'bytes':0,'file':os.path.basename(path)}
+              def video_urls(v):
+                variants=v.get('bitRateList') or []
+                variants=sorted((x for x in variants if isinstance(x,dict)),key=lambda x:x.get('dataSize') if isinstance(x.get('dataSize'),int) else 0,reverse=True)
+                addresses=[]
+                for var in variants:
+                  addresses += [x.get('src') for x in var.get('playAddr',[]) if isinstance(x,dict)]
+                addresses += [x.get('src') for x in v.get('playAddr',[]) if isinstance(x,dict)]
+                if v.get('playApi'):addresses.append(v['playApi'])
+                return list(dict.fromkeys(x for x in addresses if x and x.startswith('https://')))
+              for index,item in enumerate(imgs,1):
+                name=f'{index:02d}'
+                imageurls=item.get('urlList') or []
+                # preferentially save jpeg quality variants
+                imageurls=sorted(imageurls,key=lambda u: ('.jpeg' not in u and '.jpg' not in u, 'q75' not in u))
+                rec={'page':index,'clipType':item.get('clipType'),'width':item.get('width'),'height':item.get('height')}
+                rec['image']=await fetch(imageurls,os.path.join(OUT,name+'_image.jpg'),'image')
+                if isinstance(item.get('video'),dict) and item['video'].get('playAddr'):
+                  rec['video']=await fetch(video_urls(item['video']),os.path.join(OUT,name+'_video.mp4'),'video')
+                  rec['duration_ms']=item['video'].get('duration')
+                manifest['items'].append(rec)
+              music=data.get('music',{})
+              audurls=(music.get('playUrl') or {}).get('urlList') or []
+              manifest['audio']=await fetch(audurls,os.path.join(OUT,'background_audio.mp3'),'audio')
+              with open(os.path.join(OUT,'manifest.json'),'w',encoding='utf-8') as f:json.dump(manifest,f,ensure_ascii=False,indent=2)
+              print('SUMMARY',json.dumps({'pages':len(imgs),'images':sum(i['image']['ok'] for i in manifest['items']),'videos':sum(i.get('video',{}).get('ok',False) for i in manifest['items']),'audio':manifest['audio']['ok']},ensure_ascii=False),flush=True)
+              await browser.close()
+          asyncio.run(main())
+          
+          PY
+          python download_all.py
+          find Douyin_7707471779908236506 -maxdepth 1 -type f -printf '%f %s bytes\n'
+      - name: Upload all acquired resources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-full-7707471779908236506
+          path: Douyin_7707471779908236506/
+          retention-days: 1
+          compression-level: 6
