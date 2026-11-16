@@ -15,40 +15,53 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install tools
-        run: python -m pip install --upgrade yt-dlp requests
-      - name: Download video with alternate extractors
-        shell: bash
+      - name: Install browser environment
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Download with browser session
         run: |
           mkdir -p videos
-          yt-dlp --no-playlist --socket-timeout 15 --retries 1 -o 'videos/%(id)s.%(ext)s' 'https://www.douyin.com/video/7707940295400903291' || true
-          if ! compgen -G "videos/*.mp4" > /dev/null; then
-            python - <<'PY'
-          import requests, os, json
-          u='https://www.tikwm.com/api/'
-          try:
-              r=requests.get(u,params={'url':'https://www.douyin.com/video/7707940295400903291','hd':'1'},headers={'User-Agent':'Mozilla/5.0'},timeout=30)
-              print('API',r.status_code,r.text[:1300])
-              j=r.json()
-              d=j.get('data') or {}
-              v=d.get('hdplay') or d.get('play')
-              if v:
-                  if v.startswith('/'): v='https://www.tikwm.com'+v
-                  t=requests.get(v,timeout=60,headers={'User-Agent':'Mozilla/5.0'})
-                  t.raise_for_status()
-                  open('videos/7707940295400903291.mp4','wb').write(t.content)
-          except Exception as e: print(type(e).__name__,str(e))
+          cat > get_video.py <<'PY'
+          import asyncio
+          from playwright.async_api import async_playwright
+          async def main():
+              async with async_playwright() as p:
+                  browser=await p.chromium.launch(headless=True)
+                  ctx=await browser.new_context(locale='zh-CN',user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36')
+                  page=await ctx.new_page()
+                  await page.goto('https://www.douyin.com/video/7707940295400903291',wait_until='domcontentloaded',timeout=60000)
+                  await page.wait_for_timeout(7000)
+                  print('PAGE',page.url, 'TITLE',await page.title(),flush=True)
+                  result=await page.evaluate("""async () => {
+                      const u='/aweme/v1/web/aweme/detail/?aweme_id=7707940295400903291&device_platform=webapp&aid=6383';
+                      const r=await fetch(u, {credentials:'include',headers:{Accept:'application/json'}});
+                      const txt=await r.text();
+                      try {
+                          const j=JSON.parse(txt); const a=j.aweme_detail;
+                          return {status:r.status, excerpt:txt.slice(0,400), urls:a?.video?.play_addr?.url_list||a?.video?.play_addr_h264?.url_list||[]};
+                      } catch(e) {return {status:r.status, excerpt:txt.slice(0,400),urls:[]}}
+                  }""")
+                  print('DETAIL',str(result)[:1200],flush=True)
+                  for u in result['urls']:
+                      try:
+                          r=await ctx.request.get(u,headers={'Referer':'https://www.douyin.com/'},timeout=45000)
+                          b=await r.body()
+                          print('VIDEO',r.status,len(b),r.headers.get('content-type'),flush=True)
+                          if r.ok and len(b)>100000 and ('mp4' in r.headers.get('content-type','') or b[4:8]==b'ftyp'):
+                              open('videos/7707940295400903291.mp4','wb').write(b)
+                              break
+                      except Exception as e:print('ERR',str(e),flush=True)
+                  await browser.close()
+          asyncio.run(main())
           PY
-          fi
+          python get_video.py
           ls -lh videos
-          test "$(find videos -maxdepth 1 -name '*.mp4' -size +100k | wc -l)" -ge 1
+          test -s videos/7707940295400903291.mp4
           file videos/*.mp4
-          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 videos/*.mp4
-      - name: Make MP4 available
+      - uses: actions/upload-artifact@v4
         if: success()
-        uses: actions/upload-artifact@v4
         with:
           name: douyin-7707940295400903291
           path: videos/*.mp4
-          if-no-files-found: error
           retention-days: 1
