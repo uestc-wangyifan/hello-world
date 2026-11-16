@@ -1,0 +1,22 @@
+name: Diagnose two Douyin short links
+on:
+  push:
+    branches:
+      - chatgpt-douyin-dl-wbHHCvdaXw8
+    paths:
+      - .github/workflows/douyin-shortlink-compare.yml
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Resolve both public short links
+        shell: bash
+        run: |
+          for code in 'JBGtE8rxDrk' 'wbHHCvdaXw8'; do
+            echo "SHORT_CODE=$code"
+            curl -sSL -o /dev/null -A 'Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36' -w 'HTTP=%{http_code} FINAL_URL=%{url_effective}\n' --max-time 20 "https://v.douyin.com/$code/" || true
+            echo '---'
+          done
