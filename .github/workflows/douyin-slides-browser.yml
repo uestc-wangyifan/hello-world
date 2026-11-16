@@ -1,0 +1,77 @@
+name: Browser capture Douyin slides 7707940295400903291
+on:
+  push:
+    branches:
+      - chatgpt-douyin-slides-7707940295400903291
+    paths:
+      - .github/workflows/douyin-slides-browser.yml
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prepare browser
+        run: |
+          pip install playwright
+          python -m playwright install chromium
+      - name: Inspect media from live share page
+        run: |
+          mkdir -p output
+          cat > test.py <<'PY'
+          import asyncio, json, re, os
+          from playwright.async_api import async_playwright
+          URL='https://www.iesdouyin.com/share/slides/7707940295400903291/'
+          async def main():
+              async with async_playwright() as p:
+                  b=await p.chromium.launch(headless=True,args=['--no-sandbox'])
+                  c=await b.new_context(viewport={'width':400,'height':850},is_mobile=True,has_touch=True,device_scale_factor=2,locale='zh-CN')
+                  page=await c.new_page()
+                  videos=[]
+                  async def capture(r):
+                      try:
+                          typ=r.headers.get('content-type','')
+                          url=r.url
+                          if 'video/' in typ or 'douyinvod' in url or 'byteimg' in url or 'web/api/v2' in url or 'aweme' in url:
+                              entry={'status':r.status,'typ':typ,'url':url[:350]}
+                              videos.append(entry)
+                              print('NET',json.dumps(entry,ensure_ascii=False),flush=True)
+                              if ('video/' in typ or 'douyinvod' in url) and not os.path.exists('output/7707940295400903291.mp4'):
+                                  try:
+                                      body=await r.body()
+                                      if len(body)>100000 and body[4:8]==b'ftyp':
+                                          open('output/7707940295400903291.mp4','wb').write(body)
+                                          print('SAVED MP4',len(body),flush=True)
+                                  except Exception as e: print('FETCH ERR',str(e)[:150],flush=True)
+                      except:pass
+                  page.on('response',capture)
+                  try:
+                      await page.goto(URL,wait_until='domcontentloaded',timeout=45000)
+                      await page.wait_for_timeout(12000)
+                      print('PAGE',page.url,'TITLE',await page.title(),flush=True)
+                      print('BODY', (await page.locator('body').inner_text(timeout=5000))[:1800].replace('\n',' '),flush=True)
+                      await page.screenshot(path='output/page.png')
+                      print('VIDEOS_TAGS',await page.locator('video').count(),flush=True)
+                      for v in await page.locator('video').all():
+                          print('VIDEO ELEMENT', (await v.evaluate('(x)=>({src:x.src,poster:x.poster,readyState:x.readyState})')),flush=True)
+                          try:await v.click(timeout=3000)
+                          except:pass
+                      await page.wait_for_timeout(9000)
+                  except Exception as e:print('PAGE ERR',str(e),flush=True)
+                  open('output/requests.json','w').write(json.dumps(videos,ensure_ascii=False,indent=2))
+                  await b.close()
+          asyncio.run(main())
+          PY
+          python test.py
+          ls -lh output
+      - name: Save results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-slides-browser-7707940295400903291
+          path: output/
+          retention-days: 1
